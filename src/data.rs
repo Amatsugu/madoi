@@ -1,7 +1,5 @@
 use std::str::FromStr;
 
-use nannou::io::{JsonFileError, load_from_json};
-
 use crate::data_entry::DataEntry;
 
 #[derive(Debug, Clone)]
@@ -77,15 +75,16 @@ impl Data
 		self
 	}
 
-	pub fn load_file<P>(path: P) -> Result<Data, JsonFileError>
+	pub fn load_file<P>(path: P) -> Result<Data, ()>
 	where
 		P: AsRef<std::path::Path>,
 	{
-		let a = load_from_json::<P, Vec<DataEntry<String>>>(path)?;
-		Ok(Data {
-			raw: a,
-			meta: Default::default(),
-		}
-		.parse_metadata())
+		todo!()
+		// let a = load_from_json::<P, Vec<DataEntry<String>>>(path)?;
+		// Ok(Data {
+		// 	raw: a,
+		// 	meta: Default::default(),
+		// }
+		// .parse_metadata())
 	}
 }
