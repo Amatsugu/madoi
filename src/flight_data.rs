@@ -1,6 +1,11 @@
+use std::range::RangeInclusive;
+
+use egui_plot::{Line, Span};
+
 use crate::{
 	data::{Data, MetaDta},
 	data_entry::DataEntry,
+	plot_data::{create_line, create_line_relative},
 };
 
 #[derive(Debug, Clone)]
@@ -57,4 +62,211 @@ impl From<Data> for FlightData
 			orbital_speed: value.get_data::<f64>("Orbital Speed"),
 		}
 	}
+}
+
+impl FlightData
+{
+	pub fn normalized(&self) -> Self
+	{
+		Self {
+			airspeed: normalize(&self.airspeed),
+			mass: normalize(&self.mass),
+			altitude: normalize(&self.altitude),
+			apoapsis: normalize(&self.apoapsis),
+			preiapsis: normalize(&self.preiapsis),
+			aoa: normalize(&self.aoa),
+			eta_to_apoapsis: normalize(&self.eta_to_apoapsis),
+			isp: normalize(&self.isp),
+			orbital_speed: normalize(&self.orbital_speed),
+			pitch: normalize(&self.pitch),
+			q: normalize(&self.q),
+			target_pitch: normalize(&self.target_pitch),
+			throttle: normalize(&self.throttle),
+			thrust: normalize(&self.thrust),
+			thrust_available: normalize(&self.thrust_available),
+			twr: normalize(&self.twr),
+			..self.clone()
+		}
+	}
+
+	pub fn ascent_lines<'a>(&self) -> Vec<Line<'a>>
+	{
+		vec![
+			create_line(&self.altitude, "Altitude"),
+			create_line(&self.apoapsis, "Apoapsis"),
+			create_line(&self.preiapsis, "Periapsis"),
+		]
+	}
+	pub fn speed_lines<'a>(&self) -> Vec<Line<'a>>
+	{
+		vec![
+			create_line(&self.airspeed, "Airspeed"),
+			create_line(&self.orbital_speed, "Orbital Speed"),
+		]
+	}
+	pub fn thrust_lines<'a>(&self) -> Vec<Line<'a>>
+	{
+		vec![
+			create_line(&self.thrust, "Thrust"),
+			create_line(&self.thrust_available, "Available Thrust"),
+		]
+	}
+	pub fn attitude_lines<'a>(&self) -> Vec<Line<'a>>
+	{
+		vec![
+			create_line(&self.aoa, "AoA"),
+			create_line(&self.pitch, "Pitch"),
+			create_line(&self.target_pitch, "Target Pitch"),
+		]
+	}
+
+	pub fn ascent_lines_relative<'a>(&self) -> Vec<Line<'a>>
+	{
+		vec![
+			create_line_relative(&self.altitude, "Altitude", self.meta.start_time),
+			create_line_relative(&self.apoapsis, "Apoapsis", self.meta.start_time),
+			create_line_relative(&self.preiapsis, "Periapsis", self.meta.start_time),
+		]
+	}
+	pub fn speed_lines_relative<'a>(&self) -> Vec<Line<'a>>
+	{
+		vec![
+			create_line_relative(&self.airspeed, "Airspeed", self.meta.start_time),
+			create_line_relative(&self.orbital_speed, "Orbital Speed", self.meta.start_time),
+		]
+	}
+	pub fn thrust_lines_relative<'a>(&self) -> Vec<Line<'a>>
+	{
+		vec![
+			create_line_relative(&self.thrust, "Thrust", self.meta.start_time),
+			create_line_relative(&self.thrust_available, "Available Thrust", self.meta.start_time),
+		]
+	}
+	pub fn attitude_lines_relative<'a>(&self) -> Vec<Line<'a>>
+	{
+		vec![
+			create_line_relative(&self.aoa, "AoA", self.meta.start_time),
+			create_line_relative(&self.pitch, "Pitch", self.meta.start_time),
+			create_line_relative(&self.target_pitch, "Target Pitch", self.meta.start_time),
+		]
+	}
+
+	pub fn staging_spans(&self, relative: bool) -> Vec<Span>
+	{
+		create_span(
+			&self.stage,
+			"Stage".to_string(),
+			self.meta.start_time,
+			self.meta.end_time,
+			relative,
+		)
+	}
+
+	pub fn program_spans(&self, relative: bool) -> Vec<Span>
+	{
+		create_span(
+			&self.program,
+			"".to_string(),
+			self.meta.start_time,
+			self.meta.end_time,
+			relative,
+		)
+	}
+
+	pub fn status_spans(&self, relative: bool) -> Vec<Span>
+	{
+		create_span(
+			&self.status,
+			"".to_string(),
+			self.meta.start_time,
+			self.meta.end_time,
+			relative,
+		)
+	}
+
+	pub fn rcs_spans(&self, relative: bool) -> Vec<Span>
+	{
+		create_span(
+			&self.rcs,
+			"".to_string(),
+			self.meta.start_time,
+			self.meta.end_time,
+			relative,
+		)
+	}
+}
+
+fn create_span<T>(data: &[DataEntry<T>], label: String, start_time: f64, end_time: f64, relative: bool) -> Vec<Span>
+where
+	T: ToString,
+{
+	let mut result = Vec::with_capacity(data.len());
+	for (i, e) in data.iter().enumerate()
+	{
+		let name = if label.is_empty()
+		{
+			e.value.to_string()
+		}
+		else
+		{
+			format!("{} {}", label, e.value.to_string())
+		};
+		let t = match relative
+		{
+			true => e.timestamp - start_time,
+			false => e.timestamp,
+		};
+		if i < data.len() - 1
+		{
+			let next = &data[i + 1];
+			result.push(Span::new(
+				name,
+				RangeInclusive {
+					start: t,
+					last: next.timestamp,
+				},
+			));
+		}
+		else
+		{
+			result.push(Span::new(
+				name,
+				RangeInclusive {
+					start: t,
+					last: end_time,
+				},
+			));
+		}
+	}
+	result
+}
+
+fn normalize(data: &Vec<DataEntry<f64>>) -> Vec<DataEntry<f64>>
+{
+	let (min, max) = get_range(data);
+	let m = max - min;
+	data.iter()
+		.map(|e| DataEntry {
+			value: (e.value - min) / m,
+			..e.clone()
+		})
+		.collect()
+}
+
+fn get_range(data: &Vec<DataEntry<f64>>) -> (f64, f64)
+{
+	let mut min = f64::MAX;
+	let mut max = f64::MIN;
+	for entry in data
+	{
+		if entry.value > max
+		{
+			max = entry.value;
+		}
+		if entry.value < min
+		{
+			min = entry.value;
+		}
+	}
+	(min, max)
 }
