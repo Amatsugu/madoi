@@ -1,0 +1,118 @@
+name: Release
+
+on:
+    push:
+        tags:
+            - "v*"
+
+concurrency:
+    group: ${{ gitea.workflow }}-${{ gitea.ref || gitea.run_id }}
+    cancel-in-progress: true
+
+env:
+    cargo_bin_name: madoi.exe
+    target: x86_64-pc-windows-gnu
+
+jobs:
+    get-version:
+        runs-on: ubuntu-latest
+        outputs:
+            version: ${{ steps.determine-and-create.outputs.version }}
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Determine Version and Pre-create Gitea Release
+              id: determine-and-create
+              env:
+                  GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  INPUT_VERSION: ${{ inputs.version }}
+                  REF_NAME: ${{ gitea.ref_name }}
+              run: |
+                  set -e
+
+                  CLEAN_VERSION="$REF_NAME"
+                  echo "version=$CLEAN_VERSION" >> "$GITEA_OUTPUT"
+
+                  # 2. Pre-create the release block using the localized variable
+                  if [ '${{ inputs.upload_to_gitea || 'true' }}' = 'true' ] || [ "${{ gitea.event_name }}" = "push" ]; then
+                      echo "Ensuring release target exists on remote instance..."
+
+                      HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${{ gitea.server_url }}/api/v1/repos/${{ gitea.repository }}/releases" \
+                        -H "accept: application/json" \
+                        -H "Authorization: token $GITEA_TOKEN" \
+                        -H "Content-Type: application/json" \
+                        -d "{\"tag_name\":\"$CLEAN_VERSION\",\"target_commitish\":\"${{ gitea.sha }}\",\"name\":\"$CLEAN_VERSION\",\"draft\":false,\"prerelease\":false}")
+
+                      echo "Gitea API responded with status code: $HTTP_STATUS"
+
+                      # 201 = Created, 409 = Conflict/Already Exists (both are safe paths to continue)
+                      if [ "$HTTP_STATUS" != "201" ] && [ "$HTTP_STATUS" != "409" ]; then
+                         echo "Error: Server failed to process release creation block."
+                         exit 1
+                      fi
+                  fi
+    build:
+        needs:
+            - get-version
+        env:
+            version: ${{ needs.get-version.outputs.version }}
+        runs-on: ubuntu-latest
+
+        defaults:
+            run:
+                shell: bash
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@nightly
+              with:
+                  targets: ${{ env.target }}
+
+            - name: Restore Rust cache
+              if: ${{ gitea.event_name == 'push' }}
+              uses: Swatinem/rust-cache@v2
+              with:
+                  shared-key: release
+                  save-if: ${{ gitea.ref == 'refs/heads/main' }}
+
+            - name: Install build dependencies (Linux & Windows Cross-Compile)
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y --no-install-recommends mingw-w64
+
+            - name: Build and add binaries to app
+              run: |
+                  cargo build --locked --release --target="${{env.target}}" --no-default-features
+
+            - name: Upload package to workflow artifacts
+              uses: actions/upload-artifact@v3
+              with:
+                  path: target/release/${{env.cargo_bin_name}}
+                  name: package-windows
+                  retention-days: 1
+
+            - name: Upload package to Gitea release
+              env:
+                  GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: |
+                  echo "Uploading to release for tag: ${{ env.version }}"
+
+                  # Safely extracts ID now that env.version is correctly initialized from job context
+                  RELEASE_ID=$(curl -s -H "Authorization: token $GITEA_TOKEN" "${{ gitea.server_url }}/api/v1/repos/${{ gitea.repository }}/releases/tags/${{ env.version }}" | jq '.id // empty')
+
+                  if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" = "null" ]; then
+                     echo "Error: Failed to track down a valid Gitea Release ID for version tag ${{ env.version }}"
+                     exit 1
+                  fi
+
+                  FILE_PATH="target/release/${{ env.cargo_bin_name }}"
+                  FILE_NAME="${{ env.cargo_bin_name }}"
+
+                  echo "Uploading $FILE_NAME to release ID $RELEASE_ID..."
+                  curl -s -X POST "${{ gitea.server_url }}/api/v1/repos/${{ gitea.repository }}/releases/$RELEASE_ID/assets" \
+                    -H "accept: application/json" \
+                    -H "Authorization: token $GITEA_TOKEN" \
+                    -H "Content-Type: multipart/form-data" \
+                    -F "attachment=@$FILE_PATH;filename=$FILE_NAME"
