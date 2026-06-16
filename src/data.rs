@@ -1,4 +1,4 @@
-use std::{error::Error, fs::File, io::BufReader, str::FromStr};
+use std::{fs::File, io::BufReader, str::FromStr};
 
 use crate::data_entry::DataEntry;
 
@@ -75,13 +75,23 @@ impl Data
 		self
 	}
 
-	pub fn load_file<P>(path: P) -> Result<Data, Box<dyn Error>>
+	pub fn load_file<P>(path: P) -> Result<Data, String>
 	where
 		P: AsRef<std::path::Path>,
 	{
-		let file = File::open(path)?;
+		let file = File::open(path).map_err(|err| err.to_string())?;
 		let reader = BufReader::new(file);
-		let data = serde_json::from_reader(reader)?;
+		let data = serde_json::from_reader(reader).map_err(|err| err.to_string())?;
+		Ok(Data {
+			raw: data,
+			meta: Default::default(),
+		}
+		.parse_metadata())
+	}
+
+	pub fn load_file_raw(bytes: &[u8]) -> Result<Data, String>
+	{
+		let data = serde_json::from_slice(bytes).map_err(|err| err.to_string())?;
 		Ok(Data {
 			raw: data,
 			meta: Default::default(),

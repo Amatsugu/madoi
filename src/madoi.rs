@@ -1,8 +1,8 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use eframe::egui;
 use egui::{Id, Ui, Vec2, Vec2b, WidgetText, vec2};
-use egui_plot::{Corner, Legend, Line, Plot, Span};
+use egui_plot::{Corner, HLine, Legend, Line, Plot, PlotPoint, Span, Text, VLine};
 
 use crate::{data::Data, flight_data::FlightData, plot_data::PlotData};
 
@@ -16,6 +16,7 @@ pub struct Madoi
 	section: SpanDisplay,
 	display: DisplayMode,
 	time_mode: TimeMode,
+	load_error: Option<String>,
 }
 
 impl Madoi
@@ -30,6 +31,7 @@ impl Madoi
 		return Self::default();
 	}
 
+	#[cfg(feature = "dev")]
 	fn with_data(mut self, path: &PathBuf) -> Self
 	{
 		self.load_data(path);
@@ -38,18 +40,50 @@ impl Madoi
 
 	fn load_data(&mut self, path: &PathBuf)
 	{
-		if let Ok(loaded) = Data::load_file(path)
+		self.reset_data();
+		match Data::load_file(path)
 		{
-			self.data = Some(loaded.clone());
-			let flight_data: FlightData = loaded.into();
-			self.plot_data = Some((&flight_data).into());
-			self.flight_data_normalized = Some(flight_data.normalized());
-			self.flight_data = Some(flight_data);
+			Ok(loaded) =>
+			{
+				self.data = Some(loaded.clone());
+				let flight_data: FlightData = loaded.into();
+				self.plot_data = Some((&flight_data).into());
+				self.flight_data_normalized = Some(flight_data.normalized());
+				self.flight_data = Some(flight_data);
+			}
+			Err(err) =>
+			{
+				self.load_error = Some(err);
+			}
 		}
-		else
+	}
+
+	fn load_data_raw(&mut self, bytes: &Arc<[u8]>)
+	{
+		self.reset_data();
+		match Data::load_file_raw(bytes.iter().as_slice())
 		{
-			println!("Failed to load data")
+			Ok(loaded) =>
+			{
+				self.data = Some(loaded.clone());
+				let flight_data: FlightData = loaded.into();
+				self.plot_data = Some((&flight_data).into());
+				self.flight_data_normalized = Some(flight_data.normalized());
+				self.flight_data = Some(flight_data);
+			}
+			Err(err) =>
+			{
+				self.load_error = Some(err);
+			}
 		}
+	}
+
+	fn reset_data(&mut self)
+	{
+		self.load_error = None;
+		self.data = None;
+		self.flight_data = None;
+		self.flight_data_normalized = None;
 	}
 }
 
@@ -74,12 +108,24 @@ enum DisplayMode
 	Normalized,
 }
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Debug, Default, Clone, Copy)]
 enum TimeMode
 {
 	#[default]
 	Ut,
 	Elapsed,
+}
+
+impl From<TimeMode> for bool
+{
+	fn from(value: TimeMode) -> Self
+	{
+		match value
+		{
+			TimeMode::Ut => false,
+			TimeMode::Elapsed => true,
+		}
+	}
 }
 
 impl eframe::App for Madoi
@@ -88,20 +134,21 @@ impl eframe::App for Madoi
 	{
 		ui.input(|i| {
 			if let Some(file) = i.raw.dropped_files.first()
-				&& let Some(path) = &file.path
 			{
-				self.load_data(path);
+				if let Some(path) = &file.path
+				{
+					self.load_data(path);
+				}
+				else if let Some(bytes) = &file.bytes
+				{
+					self.load_data_raw(bytes);
+				}
 			}
 		});
 		let data_src = match self.display
 		{
 			DisplayMode::Absolute => &self.flight_data,
 			DisplayMode::Normalized => &self.flight_data_normalized,
-		};
-		let Some(data) = data_src
-		else
-		{
-			return;
 		};
 		egui::Panel::left("sidebar")
 			.default_size(SIDEBAR_WIDTH)
@@ -124,10 +171,35 @@ impl eframe::App for Madoi
 		egui::Panel::top("titlebar")
 			.default_size(HEADER_HEIGHT)
 			.show_inside(ui, |ui| {
-				ui.heading(format!("Flight Data - {} at {}", data.meta.vessel_name, data.meta.body));
+				if let Some(data) = data_src
+				{
+					ui.heading(format!("Flight Data - {} at {}", data.meta.vessel_name, data.meta.body));
+				}
+				else
+				{
+					ui.heading("No data Loaded");
+				}
 			});
 
 		egui::CentralPanel::default_margins().show_inside(ui, |ui| {
+			let Some(data) = data_src
+			else
+			{
+				ui.vertical_centered_justified(|ui| {
+					ui.heading("Drop a file here to start visualization!");
+					if let Some(err_msg) = &self.load_error
+					{
+						ui.label("Failed to load file");
+						ui.label(err_msg.to_string());
+					}
+				});
+				return;
+			};
+			let Some(_flight_data) = &self.flight_data
+			else
+			{
+				return;
+			};
 			ui.take_available_width();
 			let screen = ui.available_size();
 			ui.vertical(|ui| {
@@ -135,7 +207,8 @@ impl eframe::App for Madoi
 					//Graphs
 					let graph_size = vec2(screen.x, screen.y);
 					let cell_size = graph_size / 2.0;
-					let spans = get_spans(&self.section, data, &self.display);
+					let spans = get_spans(&self.section, data, self.time_mode.into());
+					let max_q = data.max_q_line(self.time_mode.into());
 					ui.vertical(|ui| {
 						ui.columns(2, |ui| {
 							let ascent_lines = match self.time_mode
@@ -145,16 +218,19 @@ impl eframe::App for Madoi
 							};
 							add_graph(
 								"Ascent",
-								cell_size,
 								&mut ui[0],
 								GraphData {
 									lines: ascent_lines,
 									spans: spans.clone(),
+									v_lines: vec![max_q.clone()],
+									..Default::default()
 								},
 								GraphDisplay {
 									x_label: "Time",
 									y_label: "Altitude",
 									legend_corner: Corner::LeftTop,
+									cell_size,
+									tooltip_builder: None::<fn(&mut Ui, PlotPoint)>,
 								},
 							);
 							let speed_lines = match self.time_mode
@@ -164,16 +240,19 @@ impl eframe::App for Madoi
 							};
 							add_graph(
 								"Speed",
-								cell_size,
 								&mut ui[1],
 								GraphData {
 									lines: speed_lines,
 									spans: spans.clone(),
+									v_lines: vec![max_q.clone()],
+									..Default::default()
 								},
 								GraphDisplay {
 									x_label: "Time",
 									y_label: "Speed",
 									legend_corner: Corner::LeftTop,
+									cell_size,
+									tooltip_builder: None::<fn(&mut Ui, PlotPoint)>,
 								},
 							);
 						});
@@ -185,16 +264,19 @@ impl eframe::App for Madoi
 							};
 							add_graph(
 								"Attitude",
-								cell_size,
 								&mut ui[0],
 								GraphData {
 									lines: attitude_lines,
 									spans: spans.clone(),
+									v_lines: vec![max_q.clone()],
+									..Default::default()
 								},
 								GraphDisplay {
 									x_label: "Time",
 									y_label: "Degrees",
+									cell_size,
 									legend_corner: Corner::RightTop,
+									tooltip_builder: None::<fn(&mut Ui, PlotPoint)>,
 								},
 							);
 							let thrust_lines = match self.time_mode
@@ -204,16 +286,19 @@ impl eframe::App for Madoi
 							};
 							add_graph(
 								"Thrust",
-								cell_size,
 								&mut ui[1],
 								GraphData {
 									lines: thrust_lines,
 									spans: spans.clone(),
+									v_lines: vec![max_q.clone()],
+									..Default::default()
 								},
 								GraphDisplay {
+									cell_size,
 									x_label: "Time",
 									y_label: "Thrust",
 									legend_corner: Corner::RightTop,
+									tooltip_builder: None::<fn(&mut Ui, PlotPoint)>,
 								},
 							);
 						});
@@ -224,13 +309,8 @@ impl eframe::App for Madoi
 	}
 }
 
-fn get_spans(section: &SpanDisplay, data: &FlightData, display: &DisplayMode) -> Vec<Span>
+fn get_spans(section: &SpanDisplay, data: &FlightData, relative: bool) -> Vec<Span>
 {
-	let relative = match display
-	{
-		DisplayMode::Absolute => false,
-		DisplayMode::Normalized => true,
-	};
 	match section
 	{
 		SpanDisplay::Staging => data.staging_spans(relative),
@@ -244,32 +324,37 @@ fn get_spans(section: &SpanDisplay, data: &FlightData, display: &DisplayMode) ->
 struct GraphData<'a>
 {
 	lines: Vec<Line<'a>>,
+	h_lines: Vec<(HLine, Text)>,
+	v_lines: Vec<(VLine, Text)>,
 	spans: Vec<Span>,
 }
 
-struct GraphDisplay<T>
+struct GraphDisplay<T, F>
 where
 	T: Into<egui::WidgetText>,
+	F: FnMut(&mut Ui, PlotPoint),
 {
 	x_label: T,
 	y_label: T,
 	legend_corner: Corner,
+	cell_size: Vec2,
+	tooltip_builder: Option<F>,
 }
 
 fn add_graph(
 	name: impl std::hash::Hash,
-	cell_size: Vec2,
 	ui: &mut Ui,
 	data: GraphData,
-	display: GraphDisplay<impl Into<WidgetText>>,
+	display: GraphDisplay<impl Into<WidgetText>, impl FnMut(&mut Ui, PlotPoint)>,
 )
 {
-	ui.allocate_ui(cell_size, |ui| {
+	ui.allocate_ui(display.cell_size, |ui| {
 		Plot::new(name)
 			.link_cursor(Id::new("main"), Vec2b::new(true, true))
 			.link_axis(Id::new("main"), Vec2b::new(true, true))
 			.x_axis_label(display.x_label)
 			.y_axis_label(display.y_label)
+			.grid_fade(1.0)
 			.legend(
 				Legend::default()
 					.position(display.legend_corner)
@@ -290,10 +375,36 @@ fn add_graph(
 				{
 					plot_ui.span(span);
 				}
+				for (hline, text) in data.h_lines
+				{
+					plot_ui.hline(hline);
+					plot_ui.text(text);
+				}
+				for (vline, text) in data.v_lines
+				{
+					plot_ui.vline(vline);
+					plot_ui.text(text);
+				}
 				for line in data.lines
 				{
 					plot_ui.line(line);
 				}
+				if let Some(m_pos) = plot_ui.response().hover_pos()
+				{
+					let plot_pos = plot_ui.plot_from_screen(m_pos);
+					plot_ui.response().clone().on_hover_ui_at_pointer(|ui| {
+						if let Some(mut builder) = display.tooltip_builder
+						{
+							builder(ui, plot_pos);
+						}
+					});
+				}
 			});
 	});
+}
+
+#[allow(dead_code, unused_variables)]
+fn build_tooltip(ui: &mut Ui, data: &FlightData, plot_pos: PlotPoint)
+{
+	todo!()
 }

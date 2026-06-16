@@ -1,6 +1,6 @@
 use std::range::RangeInclusive;
 
-use egui_plot::{Line, Span};
+use egui_plot::{Line, PlotPoint, Span, Text, VLine};
 
 use crate::{
 	data::{Data, MetaDta},
@@ -194,6 +194,26 @@ impl FlightData
 			relative,
 		)
 	}
+
+	pub fn max_q_line(&self, relative: bool) -> (VLine, Text)
+	{
+		let max = self
+			.q
+			.iter()
+			.fold(&self.q[0], |a, b| if b.value > a.value { b } else { a });
+		let t = if relative
+		{
+			max.timestamp - self.meta.start_time
+		}
+		else
+		{
+			max.timestamp
+		};
+		(
+			VLine::new("Max Q", t),
+			Text::new("maxq-label", PlotPoint::new(t, max.value), "Max Q"),
+		)
+	}
 }
 
 fn create_span<T>(data: &[DataEntry<T>], label: String, start_time: f64, end_time: f64, relative: bool) -> Vec<Span>
@@ -219,23 +239,22 @@ where
 		if i < data.len() - 1
 		{
 			let next = &data[i + 1];
-			result.push(Span::new(
-				name,
-				RangeInclusive {
-					start: t,
-					last: next.timestamp,
-				},
-			));
+
+			let t2 = match relative
+			{
+				true => next.timestamp - start_time,
+				false => next.timestamp,
+			};
+			result.push(Span::new(name, RangeInclusive { start: t, last: t2 }));
 		}
 		else
 		{
-			result.push(Span::new(
-				name,
-				RangeInclusive {
-					start: t,
-					last: end_time,
-				},
-			));
+			let t2 = match relative
+			{
+				true => end_time - start_time,
+				false => end_time,
+			};
+			result.push(Span::new(name, RangeInclusive { start: t, last: t2 }));
 		}
 	}
 	result
