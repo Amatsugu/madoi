@@ -25,6 +25,8 @@ pub struct FlightData
 	pub rcs: Vec<DataEntry<bool>>,
 	pub aoa: Vec<DataEntry<f64>>,
 	pub pitch: Vec<DataEntry<f64>>,
+	pub heading: Vec<DataEntry<f64>>,
+	pub roll: Vec<DataEntry<f64>>,
 	pub target_pitch: Vec<DataEntry<f64>>,
 	pub twr: Vec<DataEntry<f64>>,
 	pub throttle: Vec<DataEntry<f64>>,
@@ -53,6 +55,8 @@ impl From<Data> for FlightData
 			rcs: value.get_data::<bool>("RCS"),
 			aoa: value.get_data::<f64>("AoA"),
 			pitch: value.get_data::<f64>("Pitch"),
+			heading: value.get_data::<f64>("Heading"),
+			roll: value.get_data::<f64>("Roll"),
 			target_pitch: value.get_data::<f64>("Target Pitch"),
 			twr: value.get_data::<f64>("TWR"),
 			throttle: value.get_data::<f64>("Throttle"),
@@ -79,6 +83,8 @@ impl FlightData
 			isp: normalize(&self.isp),
 			orbital_speed: normalize(&self.orbital_speed),
 			pitch: normalize(&self.pitch),
+			heading: normalize(&self.heading),
+			roll: normalize(&self.roll),
 			q: normalize(&self.q),
 			target_pitch: normalize(&self.target_pitch),
 			throttle: normalize(&self.throttle),
@@ -116,6 +122,8 @@ impl FlightData
 		vec![
 			create_line(&self.aoa, "AoA"),
 			create_line(&self.pitch, "Pitch"),
+			create_line(&self.heading, "Heading"),
+			create_line(&self.roll, "Roll"),
 			create_line(&self.target_pitch, "Target Pitch"),
 		]
 	}
@@ -147,6 +155,8 @@ impl FlightData
 		vec![
 			create_line_relative(&self.aoa, "AoA", self.meta.start_time),
 			create_line_relative(&self.pitch, "Pitch", self.meta.start_time),
+			create_line_relative(&self.heading, "Heading", self.meta.start_time),
+			create_line_relative(&self.roll, "Roll", self.meta.start_time),
 			create_line_relative(&self.target_pitch, "Target Pitch", self.meta.start_time),
 		]
 	}

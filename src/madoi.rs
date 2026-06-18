@@ -111,8 +111,8 @@ enum DisplayMode
 #[derive(PartialEq, Debug, Default, Clone, Copy)]
 enum TimeMode
 {
-	#[default]
 	Ut,
+	#[default]
 	Elapsed,
 }
 
@@ -349,9 +349,9 @@ fn add_graph(
 )
 {
 	ui.allocate_ui(display.cell_size, |ui| {
-		Plot::new(name)
+		let _response = Plot::new(name)
 			.link_cursor(Id::new("main"), Vec2b::new(true, true))
-			.link_axis(Id::new("main"), Vec2b::new(true, true))
+			.link_axis(Id::new("main"), Vec2b::new(true, false))
 			.x_axis_label(display.x_label)
 			.y_axis_label(display.y_label)
 			.grid_fade(1.0)
