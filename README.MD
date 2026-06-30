@@ -1,2 +1,2 @@
-A telemetry visualizer for data output by my KSP ascent control script.
+A telemetry visualizer for data output by my KSP [ascent control script](https://git.kaisei.app/Amatsugu/kOS/src/branch/main/library/lib_ascent_v2.ks).
 ![Screenshot](https://aoba.app/m/6a316a3fa12adbbd0e5cf8eb)
